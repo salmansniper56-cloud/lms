@@ -1,9 +1,13 @@
+import { getUploadSignature, deleteDocument } from "./cloudinary.functions";
+
 export interface Doc {
   id: string;
   name: string;
   folder: string;
   size_bytes: number;
   storage_path: string;
+  secure_url?: string;
+  resource_type?: string;
   created_at: string;
   owner_id: string;
   mime_type: string | null;
@@ -77,12 +81,45 @@ export async function uploadDoc(file: File, folder = "General"): Promise<Doc> {
   const id = "doc_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8);
   const now = new Date().toISOString();
 
+  let storagePath = `local/${id}/${file.name}`;
+  let secureUrl: string | undefined = undefined;
+  let resourceType: string | undefined = undefined;
+
+  // Upload to Cloudinary
+  try {
+    const sig = await getUploadSignature({ data: { folder } });
+    if (sig?.apiKey && sig?.cloudName) {
+      const form = new FormData();
+      form.append("file", file);
+      form.append("api_key", sig.apiKey);
+      form.append("timestamp", String(sig.timestamp));
+      form.append("folder", sig.folder);
+      form.append("signature", sig.signature);
+
+      const res = await fetch(`https://api.cloudinary.com/v1_1/${sig.cloudName}/auto/upload`, {
+        method: "POST",
+        body: form,
+      });
+
+      if (res.ok) {
+        const json = await res.json();
+        storagePath = json.public_id || storagePath;
+        secureUrl = json.secure_url;
+        resourceType = json.resource_type;
+      }
+    }
+  } catch (err) {
+    console.warn("Cloudinary upload failed, falling back to local storage:", err);
+  }
+
   const docRecord: Doc & { fileData: Blob } = {
     id,
     name: file.name,
     folder: folder || "General",
     size_bytes: file.size,
-    storage_path: `local/${id}/${file.name}`,
+    storage_path: storagePath,
+    secure_url: secureUrl,
+    resource_type: resourceType,
     created_at: now,
     owner_id: uid,
     mime_type: file.type || "application/octet-stream",
@@ -108,11 +145,20 @@ export async function getDocBlob(docId: string): Promise<Blob> {
     const tx = db.transaction(STORE_NAME, "readonly");
     const store = tx.objectStore(STORE_NAME);
     const req = store.get(docId);
-    req.onsuccess = () => {
-      if (!req.result || !req.result.fileData) {
-        return reject(new Error("Document not found in storage."));
+    req.onsuccess = async () => {
+      if (req.result?.fileData) {
+        return resolve(req.result.fileData);
       }
-      resolve(req.result.fileData);
+      if (req.result?.secure_url) {
+        try {
+          const res = await fetch(req.result.secure_url);
+          if (res.ok) {
+            const blob = await res.blob();
+            return resolve(blob);
+          }
+        } catch {}
+      }
+      reject(new Error("Document not found in storage."));
     };
     req.onerror = () => reject(req.error);
   });
@@ -123,9 +169,24 @@ export async function deleteDoc(id: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, "readwrite");
     const store = tx.objectStore(STORE_NAME);
-    const req = store.delete(id);
-    req.onsuccess = () => resolve();
-    req.onerror = () => reject(req.error);
+    const getReq = store.get(id);
+
+    getReq.onsuccess = async () => {
+      const doc = getReq.result;
+      if (doc?.storage_path) {
+        deleteDocument({
+          data: {
+            id,
+            storage_path: doc.storage_path,
+            resource_type: doc.resource_type || "raw",
+          },
+        }).catch(() => null);
+      }
+      const delReq = store.delete(id);
+      delReq.onsuccess = () => resolve();
+      delReq.onerror = () => reject(delReq.error);
+    };
+    getReq.onerror = () => reject(getReq.error);
   });
 }
 
@@ -161,7 +222,22 @@ export async function moveDoc(id: string, newFolder: string): Promise<void> {
   });
 }
 
-export async function saveFile(doc: { id: string; name: string }) {
+export async function saveFile(doc: { id: string; name: string; secure_url?: string }) {
+  if (doc.secure_url) {
+    try {
+      const res = await fetch(doc.secure_url);
+      if (res.ok) {
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = doc.name;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 2000);
+        return;
+      }
+    } catch {}
+  }
   const blob = await getDocBlob(doc.id);
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");

@@ -31,30 +31,42 @@ export const getUploadSignature = createServerFn({ method: "POST" })
 
 export const deleteDocument = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { id: string }) => input)
+  .inputValidator((input: { id: string; storage_path?: string; resource_type?: string }) => input)
   .handler(async ({ data, context }) => {
-    const { data: doc, error } = await context.supabase
-      .from("documents")
-      .select("id, storage_path")
-      .eq("id", data.id)
-      .eq("owner_id", context.userId)
-      .single();
-    if (error || !doc) throw new Error("Document not found.");
-    const { cloudName, apiKey, apiSecret } = cloudConfig();
-    const timestamp = Math.floor(Date.now() / 1000);
-    const signature = signParams({ public_id: doc.storage_path, timestamp }, apiSecret);
-    const body = new URLSearchParams({
-      public_id: doc.storage_path,
-      api_key: apiKey,
-      timestamp: String(timestamp),
-      signature,
-    });
-    await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/raw/destroy`, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body,
-    }).catch(() => null);
-    const { error: delErr } = await context.supabase.from("documents").delete().eq("id", data.id);
-    if (delErr) throw new Error(delErr.message);
+    let storagePath = data.storage_path;
+    if (!storagePath) {
+      try {
+        const { data: doc } = await context.supabase
+          .from("documents")
+          .select("id, storage_path")
+          .eq("id", data.id)
+          .maybeSingle();
+        if (doc) storagePath = doc.storage_path;
+      } catch {}
+    }
+
+    if (storagePath) {
+      try {
+        const { cloudName, apiKey, apiSecret } = cloudConfig();
+        const timestamp = Math.floor(Date.now() / 1000);
+        const signature = signParams({ public_id: storagePath, timestamp }, apiSecret);
+        const resourceType = data.resource_type || "raw";
+        await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/${resourceType}/destroy`, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({
+            public_id: storagePath,
+            api_key: apiKey,
+            timestamp: String(timestamp),
+            signature,
+          }),
+        }).catch(() => null);
+      } catch {}
+    }
+
+    try {
+      await context.supabase.from("documents").delete().eq("id", data.id);
+    } catch {}
+
     return { ok: true };
   });
