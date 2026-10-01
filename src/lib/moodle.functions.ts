@@ -72,18 +72,35 @@ export const moodleLogin = createServerFn({ method: "POST" })
       },
     });
 
-    const { data: existing } = await supabaseAdmin.from("profiles").select("id").eq("moodle_user_id", moodleUserId).maybeSingle().catch(() => ({ data: null }));
-    let userId = existing?.id as string | undefined;
-    if (!userId) {
-      const { data: created, error } = await supabaseAdmin.auth.admin.createUser({
-        email,
-        password,
-        email_confirm: true,
-        user_metadata: { full_name: info.fullname, numl_id: info.username },
-      }).catch((err) => ({ data: null, error: err }));
+    let existingProfile: { id: string } | null = null;
+    try {
+      const res = await supabaseAdmin.from("profiles").select("id").eq("moodle_user_id", moodleUserId).maybeSingle();
+      if (res?.data) {
+        existingProfile = res.data as { id: string };
+      }
+    } catch {
+      existingProfile = null;
+    }
 
-      if (created?.user) {
-        userId = created.user.id;
+    let userId = existingProfile?.id as string | undefined;
+    if (!userId) {
+      let createdUser: { id: string } | null = null;
+      try {
+        const res = await supabaseAdmin.auth.admin.createUser({
+          email,
+          password,
+          email_confirm: true,
+          user_metadata: { full_name: info.fullname, numl_id: info.username },
+        });
+        if (res?.data?.user) {
+          createdUser = res.data.user;
+        }
+      } catch {
+        createdUser = null;
+      }
+
+      if (createdUser) {
+        userId = createdUser.id;
       } else {
         const { data: suData, error: suErr } = await anon.auth.signUp({
           email,
@@ -91,9 +108,15 @@ export const moodleLogin = createServerFn({ method: "POST" })
           options: { data: { full_name: info.fullname, numl_id: info.username } },
         });
         if (suErr || !suData?.user) {
-          return { ok: false as const, error: "Could not create your account. Please try again." };
+          const { data: signinData } = await anon.auth.signInWithPassword({ email, password });
+          if (signinData?.user) {
+            userId = signinData.user.id;
+          } else {
+            return { ok: false as const, error: "Could not create or access your account. Please try again." };
+          }
+        } else {
+          userId = suData.user.id;
         }
-        userId = suData.user.id;
       }
     }
 
