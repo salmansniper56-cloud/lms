@@ -29,6 +29,9 @@ export async function streamAi(
   const reader = res.body.getReader();
   const dec = new TextDecoder();
   let buf = "";
+  let fullContent = "";
+  let fullReasoning = "";
+
   while (true) {
     const { value, done } = await reader.read();
     if (done) break;
@@ -39,14 +42,31 @@ export async function streamAi(
       const l = line.trim();
       if (!l.startsWith("data:")) continue;
       const payload = l.slice(5).trim();
-      if (payload === "[DONE]") return;
+      if (payload === "[DONE]") {
+        if (!fullContent && fullReasoning) {
+          onDelta(fullReasoning);
+        }
+        return;
+      }
       try {
         const j = JSON.parse(payload);
-        const d = j.choices?.[0]?.delta?.content;
-        if (d) onDelta(d);
+        const delta = j.choices?.[0]?.delta;
+        const d = delta?.content;
+        const r = delta?.reasoning_content;
+
+        if (d) {
+          fullContent += d;
+          onDelta(d);
+        } else if (r) {
+          fullReasoning += r;
+        }
       } catch {
         /* partial */
       }
     }
+  }
+
+  if (!fullContent && fullReasoning) {
+    onDelta(fullReasoning);
   }
 }

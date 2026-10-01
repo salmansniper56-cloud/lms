@@ -112,6 +112,7 @@ export const Route = createFileRoute("/api/ai-chat")({
             model,
             stream: true,
             temperature: 0.6,
+            max_tokens: 4096,
             messages: [{ role: "system", content: system }, ...parsed.data.messages],
           }),
           signal: request.signal,

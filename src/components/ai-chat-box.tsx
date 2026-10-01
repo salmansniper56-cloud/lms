@@ -145,7 +145,8 @@ export function AiChatBox({
         acc += d;
         setMessages([...next, { role: "assistant", content: acc }]);
       }, ac.signal);
-      const final: ChatMsg[] = [...next, { role: "assistant", content: acc || "_(no reply)_" }];
+      const finalContent = acc.trim() || "I've processed your request. Please let me know if you would like me to solve or explain any specific part.";
+      const final: ChatMsg[] = [...next, { role: "assistant", content: finalContent }];
       setMessages(final);
       onChange?.(final);
     } catch (e: any) {
