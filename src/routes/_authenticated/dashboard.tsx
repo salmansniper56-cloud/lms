@@ -22,21 +22,23 @@ function Dashboard() {
   if (error) return <ErrorBox error={error} />;
   if (!data) return null;
 
-  const upcoming = data.events.filter((e) => !e.overdue);
-  const overdue = data.events.filter((e) => e.overdue);
+  const events = data.events ?? [];
+  const courses = data.courses ?? [];
+  const upcoming = events.filter((e) => !e.overdue);
+  const overdue = events.filter((e) => e.overdue);
   const rows = [...overdue, ...upcoming].slice(0, 10);
 
   return (
     <div>
       <div className="border-b bg-card px-4 py-4 md:px-8">
         <p className="text-xs text-muted-foreground">{new Date().toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</p>
-        <h1 className="text-2xl font-semibold">Welcome, {data.fullName}</h1>
+        <h1 className="text-2xl font-semibold">Welcome, {data.fullName || "Student"}</h1>
       </div>
 
       <div className="grid gap-4 p-4 md:p-8 xl:grid-cols-[minmax(0,1fr)_300px]">
         <div className="min-w-0 space-y-4">
           <div className="grid grid-cols-3 divide-x rounded border bg-card">
-            <Stat label="Enrolled courses" value={data.courses.length} />
+            <Stat label="Enrolled courses" value={courses.length} />
             <Stat label="Upcoming deadlines" value={upcoming.length} />
             <Stat label="Overdue" value={overdue.length} warn={overdue.length > 0} />
           </div>
@@ -100,7 +102,7 @@ function Dashboard() {
               <Link to="/courses" className="text-xs text-primary hover:underline">All courses</Link>
             </div>
             <ul className="divide-y">
-              {data.courses.slice(0, 8).map((c) => (
+              {courses.slice(0, 8).map((c) => (
                 <li key={c.id}>
                   <Link to="/courses/$courseId" params={{ courseId: String(c.id) }} className="flex items-center gap-4 px-4 py-2.5 hover:bg-muted/40">
                     <span className="w-24 shrink-0 truncate text-xs font-semibold text-muted-foreground">{c.shortname}</span>

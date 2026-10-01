@@ -108,6 +108,16 @@ export const requireSupabaseAuth = createMiddleware({ type: 'function' }).server
         if (payload?.sub) {
           userId = payload.sub;
           claims = payload;
+          if (payload.moodleToken) {
+            const { setMoodleSessionCache } = await import('@/lib/moodle.server');
+            setMoodleSessionCache(payload.sub, {
+              token: payload.moodleToken,
+              moodleUserId: Number(payload.moodleUserId),
+              role: payload.role || 'student',
+              fullName: payload.fullName || 'Student',
+              numlId: payload.numlId || '',
+            });
+          }
         }
       } catch {}
     }
@@ -119,8 +129,8 @@ export const requireSupabaseAuth = createMiddleware({ type: 'function' }).server
     return next({
       context: {
         supabase,
-        userId: data.claims.sub,
-        claims: data.claims,
+        userId,
+        claims: claims || { sub: userId },
       },
     });
   },
