@@ -3,8 +3,81 @@ import ReactMarkdown from "react-markdown";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { streamAi, type ChatMsg } from "@/lib/ai-client";
-import { ArrowUp, GraduationCap, Loader2, Paperclip, Square } from "lucide-react";
+import { ArrowUp, GraduationCap, Loader2, Paperclip, Square, Copy, Check } from "lucide-react";
 import { toast } from "sonner";
+
+function CodeBlock({ language, code }: { language: string; code: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    navigator.clipboard.writeText(code);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+  return (
+    <div className="my-3 rounded-lg overflow-hidden border border-border/80 bg-zinc-950 text-zinc-100 text-xs font-mono shadow-sm">
+      <div className="flex items-center justify-between px-3 py-1.5 bg-zinc-900 border-b border-zinc-800 text-zinc-400">
+        <span className="uppercase text-[10px] tracking-wider font-semibold">{language || "code"}</span>
+        <button
+          onClick={copy}
+          type="button"
+          className="flex items-center gap-1 hover:text-zinc-100 transition-colors py-0.5 px-1.5 rounded hover:bg-zinc-800"
+        >
+          {copied ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
+          <span>{copied ? "Copied" : "Copy"}</span>
+        </button>
+      </div>
+      <pre className="p-3.5 overflow-x-auto leading-relaxed">
+        <code>{code}</code>
+      </pre>
+    </div>
+  );
+}
+
+function CleanMarkdown({ content }: { content: string }) {
+  // Strip out reasoning / <think> tags if emitted by model
+  const cleaned = content.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+
+  return (
+    <ReactMarkdown
+      components={{
+        h1: ({ children }) => <h1 className="text-base font-bold text-foreground mt-4 mb-2 pb-1 border-b">{children}</h1>,
+        h2: ({ children }) => <h2 className="text-sm font-semibold text-foreground mt-3 mb-1.5">{children}</h2>,
+        h3: ({ children }) => <h3 className="text-xs font-semibold text-foreground mt-2 mb-1">{children}</h3>,
+        p: ({ children }) => <p className="mb-2 leading-relaxed text-foreground/90 last:mb-0">{children}</p>,
+        ul: ({ children }) => <ul className="my-2 ml-4 list-disc space-y-1 text-foreground/90">{children}</ul>,
+        ol: ({ children }) => <ol className="my-2 ml-4 list-decimal space-y-1 text-foreground/90">{children}</ol>,
+        li: ({ children }) => <li className="leading-relaxed pl-1">{children}</li>,
+        strong: ({ children }) => <strong className="font-semibold text-foreground">{children}</strong>,
+        blockquote: ({ children }) => (
+          <blockquote className="my-2 border-l-4 border-gold/70 bg-accent/30 pl-3 py-1 italic rounded-r text-muted-foreground">
+            {children}
+          </blockquote>
+        ),
+        code({ node, inline, className, children, ...props }: any) {
+          const match = /language-(\w+)/.exec(className || "");
+          const codeString = String(children).replace(/\n$/, "");
+          if (!inline && (match || codeString.includes("\n"))) {
+            return <CodeBlock language={match ? match[1] : ""} code={codeString} />;
+          }
+          return (
+            <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs font-medium text-primary" {...props}>
+              {children}
+            </code>
+          );
+        },
+        table: ({ children }) => (
+          <div className="my-3 overflow-x-auto rounded border">
+            <table className="w-full text-left text-xs border-collapse">{children}</table>
+          </div>
+        ),
+        th: ({ children }) => <th className="border-b bg-muted/60 p-2 font-semibold">{children}</th>,
+        td: ({ children }) => <td className="border-b p-2 border-muted/40">{children}</td>,
+      }}
+    >
+      {cleaned}
+    </ReactMarkdown>
+  );
+}
 
 const suggestions = [
   "Plan my study week around my deadlines",
@@ -125,7 +198,7 @@ export function AiChatBox({
                 <GraduationCap className="h-4 w-4" />
               </div>
               <div className="prose-chat min-w-0 flex-1 text-sm leading-relaxed">
-                {m.content ? <ReactMarkdown>{m.content}</ReactMarkdown> : (
+                {m.content ? <CleanMarkdown content={m.content} /> : (
                   <span className="inline-flex items-center gap-2 text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> Thinking…</span>
                 )}
               </div>

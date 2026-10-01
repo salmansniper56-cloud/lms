@@ -10,6 +10,36 @@ export interface ResolvedTask {
   attachmentContent?: string;
 }
 
+async function extractFileContent(
+  filename: string,
+  fileurl: string,
+  token: string,
+): Promise<string | undefined> {
+  try {
+    const fullUrl = fileurl + (fileurl.includes("?") ? "&" : "?") + "token=" + token;
+    const res = await fetch(fullUrl);
+    if (!res.ok) return undefined;
+    const buf = await res.arrayBuffer();
+    const lower = filename.toLowerCase();
+
+    if (lower.endsWith(".docx")) {
+      const mammoth = await import("mammoth");
+      const textResult = await mammoth.extractRawText({ buffer: Buffer.from(buf) });
+      return (textResult.value || "").slice(0, 30000);
+    } else if (lower.endsWith(".pdf")) {
+      const { PDFParse } = await import("pdf-parse");
+      const parser = new PDFParse({ data: Buffer.from(buf) });
+      const pdfData = await parser.getText();
+      return (pdfData.text || "").slice(0, 30000);
+    } else if (/\.(txt|py|asm|cpp|c|java|sql|html|css|js|md)$/i.test(lower)) {
+      return Buffer.from(buf).toString("utf-8").slice(0, 30000);
+    }
+  } catch (err) {
+    console.warn("Could not download/parse file:", filename, err);
+  }
+  return undefined;
+}
+
 export async function detectAndFetchMoodleTask(
   token: string,
   moodleUserId: number,
@@ -18,7 +48,7 @@ export async function detectAndFetchMoodleTask(
   const query = userMessage.toLowerCase();
 
   // Check if user is asking about a lab, assignment, quiz, or task
-  const hasTaskKeyword = /\b(lab|assignment|task|quiz|exercise|oel|ccp|homework)\b/i.test(query);
+  const hasTaskKeyword = /\b(lab|assignment|task|quiz|exercise|oel|ccp|homework|project)\b/i.test(query);
   if (!hasTaskKeyword) return null;
 
   try {
@@ -28,24 +58,61 @@ export async function detectAndFetchMoodleTask(
 
     // Filter courses if a specific course is mentioned in the query
     let candidateCourses = courses;
-    const mentionedCourse = courses.filter((c) => {
+    const courseKeywords = [
+      "coal", "ai", "db", "database", "web", "ds", "data structure",
+      "dld", "ap", "physics", "se", "software", "algo", "algorithm",
+      "math", "algebra", "network", "security", "os", "operating system",
+    ];
+
+    const matchedCourses = courses.filter((c) => {
       const short = (c.shortname || "").toLowerCase();
       const full = (c.fullname || "").toLowerCase();
-      // Match common acronyms/terms like "coal", "ai", "db", "database", "web", "ds", "dld", "ap"
-      const terms = ["coal", "ai", "db", "database", "web", "ds", "dld", "ap", "se", "software", "algo", "algebra"];
-      for (const term of terms) {
-        if (query.includes(term) && (short.includes(term) || full.includes(term))) {
-          return true;
-        }
-      }
-      return false;
+      return courseKeywords.some((term) => query.includes(term) && (short.includes(term) || full.includes(term)));
     });
 
-    if (mentionedCourse.length > 0) {
-      candidateCourses = mentionedCourse;
+    if (matchedCourses.length > 0) {
+      candidateCourses = matchedCourses;
     }
 
-    // 2. Fetch assignments for candidate courses
+    // Number matching (e.g., "lab 2", "lab 02", "assignment 1")
+    const numMatch = query.match(/\b(?:lab|assignment|task|quiz|exercise|week)\s*(?:task\s*)?#?\s*0?(\d+)\b/i);
+    const targetNum = numMatch ? numMatch[1] : null;
+
+    // 2. First search course sections / resources (where lab manuals and handouts are posted)
+    for (const c of candidateCourses) {
+      try {
+        const sections = await callMoodle<any[]>(token, "core_course_get_contents", { courseid: c.id });
+        if (Array.isArray(sections)) {
+          for (const s of sections) {
+            for (const m of (s.modules || [])) {
+              const modName = (m.name || "").toLowerCase();
+              const isMatch = targetNum
+                ? /\b(lab|task|assignment)\b/i.test(modName) && new RegExp(`\\b0?${targetNum}\\b`, "i").test(modName)
+                : query.split(/\s+/).filter((w) => w.length > 2).some((w) => modName.includes(w));
+
+              if (isMatch && m.contents && m.contents.length > 0) {
+                // Found matched resource file!
+                const file = m.contents[0];
+                const content = await extractFileContent(file.filename, file.fileurl, token);
+                if (content) {
+                  return {
+                    courseName: c.fullname || c.shortname,
+                    taskName: m.name,
+                    instructions: stripHtml(m.description || "").trim(),
+                    attachmentName: file.filename,
+                    attachmentContent: content,
+                  };
+                }
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("Could not check course contents for course", c.id, err);
+      }
+    }
+
+    // 3. Fallback: Search assignment submission links
     const courseIds = candidateCourses.map((c) => c.id);
     const params: Record<string, unknown> = {};
     courseIds.forEach((id, idx) => {
@@ -62,82 +129,44 @@ export async function detectAndFetchMoodleTask(
       });
     });
 
-    if (allAssignments.length === 0) return null;
-
-    // 3. Find the best matching assignment
-    // Check for number match (e.g., "lab 2", "lab 02", "assignment 1")
-    const numMatch = query.match(/\b(?:lab|assignment|task|quiz)\s*(?:task\s*)?#?\s*0?(\d+)\b/i);
-    const targetNum = numMatch ? numMatch[1] : null;
-
-    let bestMatch: { course: any; assign: any } | null = null;
-
+    let bestAssign: { course: any; assign: any } | null = null;
     if (targetNum) {
-      // Look for assignment whose name contains this number
-      bestMatch = allAssignments.find(({ assign }) => {
+      bestAssign = allAssignments.find(({ assign }) => {
         const name = (assign.name || "").toLowerCase();
-        const regex = new RegExp(`\\b0?${targetNum}\\b`, "i");
-        return regex.test(name);
+        return new RegExp(`\\b0?${targetNum}\\b`, "i").test(name);
       }) || null;
     }
 
-    // Fallback: match by title similarity
-    if (!bestMatch) {
-      bestMatch = allAssignments.find(({ assign }) => {
+    if (!bestAssign) {
+      bestAssign = allAssignments.find(({ assign }) => {
         const name = (assign.name || "").toLowerCase();
-        const words = query.split(/\s+/).filter((w) => w.length > 2);
-        return words.filter((w) => name.includes(w)).length >= 2;
+        return query.split(/\s+/).filter((w) => w.length > 2).filter((w) => name.includes(w)).length >= 2;
       }) || null;
     }
 
-    if (!bestMatch) {
-      // If user said "solve this course lab 2" and no number was matched, pick the most recent lab
-      bestMatch = allAssignments.find(({ assign }) => /lab/i.test(assign.name)) || allAssignments[0];
-    }
+    if (bestAssign) {
+      const { course, assign } = bestAssign;
+      let attachmentName: string | undefined;
+      let attachmentContent: string | undefined;
 
-    if (!bestMatch) return null;
-
-    const { course, assign } = bestMatch;
-    const task: ResolvedTask = {
-      courseName: course.fullname || course.shortname || "NUML Course",
-      taskName: assign.name,
-      dueDate: assign.duedate,
-      instructions: stripHtml(assign.intro || "").trim(),
-    };
-
-    // 4. Download and parse attachment if available
-    const attachments = assign.introattachments || [];
-    if (attachments.length > 0) {
-      const file = attachments[0];
-      task.attachmentName = file.filename;
-
-      try {
-        const fileUrl = file.fileurl + (file.fileurl.includes("?") ? "&" : "?") + "token=" + token;
-        const res = await fetch(fileUrl);
-        if (res.ok) {
-          const buf = await res.arrayBuffer();
-          const lowerName = file.filename.toLowerCase();
-
-          if (lowerName.endsWith(".pdf")) {
-            const { PDFParse } = await import("pdf-parse");
-            const parser = new PDFParse({ data: Buffer.from(buf) });
-            const pdfData = await parser.getText();
-            task.attachmentContent = (pdfData.text || "").slice(0, 25000);
-          } else if (lowerName.endsWith(".docx")) {
-            const mammoth = await import("mammoth");
-            const textResult = await mammoth.extractRawText({ buffer: Buffer.from(buf) });
-            task.attachmentContent = (textResult.value || "").slice(0, 25000);
-          } else if (/\.(txt|py|asm|cpp|c|java|sql|html|css|js|md)$/i.test(lowerName)) {
-            task.attachmentContent = Buffer.from(buf).toString("utf-8").slice(0, 25000);
-          } else {
-            task.attachmentContent = `[Attached file: ${file.filename} (${file.mimetype || "unknown type"}, size: ${Math.round(file.filesize / 1024)} KB)]`;
-          }
-        }
-      } catch (err) {
-        console.warn("Could not download/parse assignment attachment:", err);
+      const attachments = assign.introattachments || [];
+      if (attachments.length > 0) {
+        const file = attachments[0];
+        attachmentName = file.filename;
+        attachmentContent = await extractFileContent(file.filename, file.fileurl, token);
       }
+
+      return {
+        courseName: course.fullname || course.shortname,
+        taskName: assign.name,
+        dueDate: assign.duedate,
+        instructions: stripHtml(assign.intro || "").trim(),
+        attachmentName,
+        attachmentContent,
+      };
     }
 
-    return task;
+    return null;
   } catch (e) {
     console.warn("detectAndFetchMoodleTask error:", e);
     return null;

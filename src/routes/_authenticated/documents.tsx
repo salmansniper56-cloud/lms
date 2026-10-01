@@ -7,8 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { DocPreview } from "@/components/doc-preview";
-import { uploadDoc, saveFile, type Doc } from "@/lib/docs";
-import { deleteDocument } from "@/lib/cloudinary.functions";
+import { uploadDoc, listDocs, deleteDoc, renameDoc, moveDoc, saveFile, type Doc } from "@/lib/docs";
 import { formatBytes } from "@/lib/use-profile";
 import { FileText, Upload, MoreVertical, Folder, Loader2, Bot } from "lucide-react";
 import { toast } from "sonner";
@@ -27,15 +26,9 @@ function Documents() {
   const [uploading, setUploading] = useState(false);
   const [preview, setPreview] = useState<Doc | null>(null);
 
-  const { data: me } = useQuery({ queryKey: ["uid"], queryFn: async () => (await supabase.auth.getUser()).data.user?.id });
   const { data: docs, isLoading } = useQuery({
-    queryKey: ["documents", me],
-    enabled: !!me,
-    queryFn: async () => {
-      const { data, error } = await supabase.from("documents").select("*").eq("owner_id", me!).order("created_at", { ascending: false });
-      if (error) throw error;
-      return data as Doc[];
-    },
+    queryKey: ["documents"],
+    queryFn: async () => listDocs(),
   });
 
   async function onFiles(files: FileList) {
@@ -56,18 +49,18 @@ function Documents() {
   async function rename(d: Doc) {
     const name = prompt("New name", d.name);
     if (!name || name === d.name) return;
-    await supabase.from("documents").update({ name, updated_at: new Date().toISOString() }).eq("id", d.id);
+    await renameDoc(d.id, name);
     qc.invalidateQueries({ queryKey: ["documents"] });
   }
   async function move(d: Doc) {
     const f = prompt("Move to folder", d.folder);
     if (!f) return;
-    await supabase.from("documents").update({ folder: f }).eq("id", d.id);
+    await moveDoc(d.id, f);
     qc.invalidateQueries({ queryKey: ["documents"] });
   }
   async function remove(d: Doc) {
     if (!confirm(`Delete "${d.name}"?`)) return;
-    await deleteDocument({ data: { id: d.id } });
+    await deleteDoc(d.id);
     qc.invalidateQueries({ queryKey: ["documents"] });
   }
 
@@ -78,13 +71,13 @@ function Documents() {
     <div className="pb-10">
       <PageHeader
         title="My Documents"
-        subtitle="Word files, organised by folder"
+        subtitle="Store, organize, and preview your files and course notes"
         action={
           <div className="flex items-center gap-2">
             <Input value={folder} onChange={(e) => setFolder(e.target.value)} placeholder="Folder" className="w-40" />
-            <input ref={fileRef} type="file" accept=".docx,.doc" multiple className="hidden" onChange={(e) => e.target.files && onFiles(e.target.files)} />
+            <input ref={fileRef} type="file" accept="*/*" multiple className="hidden" onChange={(e) => e.target.files && onFiles(e.target.files)} />
             <Button onClick={() => fileRef.current?.click()} disabled={uploading}>
-              {uploading ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Upload className="mr-1 h-4 w-4" />} Upload DOCX
+              {uploading ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Upload className="mr-1 h-4 w-4" />} Upload File
             </Button>
           </div>
         }
@@ -100,7 +93,7 @@ function Documents() {
         <div>
           <Input placeholder="Search documents…" value={q} onChange={(e) => setQ(e.target.value)} className="mb-4 max-w-sm" />
           {isLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : list.length === 0 ? (
-            <div className="rounded-md border border-dashed p-10 text-center text-sm text-muted-foreground">No documents yet. Upload your first Word file.</div>
+            <div className="rounded-md border border-dashed p-10 text-center text-sm text-muted-foreground">No documents yet. Upload your first file.</div>
           ) : (
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
               {list.map((d) => (
