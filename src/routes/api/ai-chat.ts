@@ -57,6 +57,7 @@ export const Route = createFileRoute("/api/ai-chat")({
 
         // Build Moodle context
         let context = "";
+        let taskContext = "";
         try {
           const { getMoodleSession, getCourses, getUpcomingEvents } = await import("@/lib/moodle.server");
           const s = await getMoodleSession(userId);
@@ -71,6 +72,22 @@ export const Route = createFileRoute("/api/ai-chat")({
             `Upcoming deadlines/events:\n${events
               .map((e) => `- ${e.name} [${e.course ?? ""}] due ${new Date(e.timesort * 1000).toUTCString()}${e.overdue ? " (OVERDUE)" : ""}`)
               .join("\n") || "none"}`;
+
+          // Check if user is asking to solve a specific lab/assignment/task
+          const lastUserMsg = parsed.data.messages.filter((m) => m.role === "user").pop()?.content || "";
+          const { detectAndFetchMoodleTask } = await import("@/lib/moodle-task-fetcher");
+          const task = await detectAndFetchMoodleTask(s.token, s.moodleUserId, lastUserMsg);
+          if (task) {
+            taskContext =
+              `\n\n--- AUTOMATICALLY DETECTED & FETCHED MOODLE TASK ---\n` +
+              `Course: ${task.courseName}\n` +
+              `Task / Assignment: ${task.taskName}\n` +
+              (task.instructions ? `Teacher's Instructions:\n${task.instructions}\n` : "") +
+              (task.attachmentName ? `Attached Task File: ${task.attachmentName}\n` : "") +
+              (task.attachmentContent ? `File Content / Problem Statements:\n${task.attachmentContent}\n` : "") +
+              `-----------------------------------------------------\n` +
+              `CRITICAL DIRECTIVE: The student wants to solve or complete this specific LMS task. You already have the actual questions, instructions, and file contents directly from their NUML LMS above. NEVER ask the student for screenshots, photos, PDFs, or file uploads. Directly deliver comprehensive, step-by-step solutions, clean complete code, explanations, and expected outputs.\n`;
+          }
         } catch {
           context = "Moodle data unavailable right now.";
         }
@@ -80,7 +97,8 @@ export const Route = createFileRoute("/api/ai-chat")({
           "Help students and teachers plan and organise study, explain course topics, summarise documents, draft notes, outlines, practice quizzes, " +
           "and for teachers draft announcements, quiz questions and feedback. Use markdown. Be concise and practical. " +
           "Never claim to have submitted or changed anything in Moodle.\n\n" +
-          "Live LMS context:\n" + context;
+          "Live LMS context:\n" + context +
+          taskContext;
 
         const upstream = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
           method: "POST",
