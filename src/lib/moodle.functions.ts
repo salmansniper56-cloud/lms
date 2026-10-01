@@ -5,6 +5,7 @@ import {
   MOODLE_URL,
   callMoodle,
   getMoodleSession,
+  setMoodleSessionCache,
   getCourses,
   getUpcomingEvents,
   stripHtml,
@@ -120,22 +121,38 @@ export const moodleLogin = createServerFn({ method: "POST" })
       }
     }
 
-    const { error: pErr } = await supabaseAdmin.from("profiles").upsert({
-      id: userId,
-      moodle_user_id: moodleUserId,
-      numl_id: String(info.username),
-      full_name: String(info.fullname || info.username),
-      role,
-      avatar_url: info.userpictureurl || null,
-      updated_at: new Date().toISOString(),
-    });
-    if (pErr) return { ok: false as const, error: "Could not save your profile." };
-    await supabaseAdmin.from("moodle_tokens").upsert({
-      user_id: userId,
+    setMoodleSessionCache(userId, {
       token,
-      private_token: tokenJson.privatetoken || null,
-      updated_at: new Date().toISOString(),
+      moodleUserId,
+      role,
+      fullName: String(info.fullname || info.username),
+      numlId: String(info.username),
     });
+
+    try {
+      await supabaseAdmin.from("profiles").upsert({
+        id: userId,
+        moodle_user_id: moodleUserId,
+        numl_id: String(info.username),
+        full_name: String(info.fullname || info.username),
+        role,
+        avatar_url: info.userpictureurl || null,
+        updated_at: new Date().toISOString(),
+      });
+    } catch (e) {
+      console.warn("Notice: could not upsert profile to DB:", e);
+    }
+
+    try {
+      await supabaseAdmin.from("moodle_tokens").upsert({
+        user_id: userId,
+        token,
+        private_token: tokenJson.privatetoken || null,
+        updated_at: new Date().toISOString(),
+      });
+    } catch (e) {
+      console.warn("Notice: could not upsert moodle_tokens to DB:", e);
+    }
 
     const { data: sess, error: sErr } = await anon.auth.signInWithPassword({ email, password });
     if (sErr || !sess.session) return { ok: false as const, error: "Sign-in failed. Please try again." };

@@ -16,8 +16,20 @@ export function useProfile() {
     queryFn: async () => {
       const { data: u } = await supabase.auth.getUser();
       if (!u.user) return null;
-      const { data } = await supabase.from("profiles").select("*").eq("id", u.user.id).maybeSingle();
-      return data as Profile | null;
+      try {
+        const { data } = await supabase.from("profiles").select("*").eq("id", u.user.id).maybeSingle();
+        if (data) return data as Profile;
+      } catch {}
+
+      const meta = u.user.user_metadata || {};
+      return {
+        id: u.user.id,
+        numl_id: meta.numl_id || "",
+        full_name: meta.full_name || u.user.email?.split("@")[0] || "Student",
+        role: meta.role || "student",
+        avatar_url: meta.avatar_url || null,
+        moodle_user_id: meta.moodle_user_id || 0,
+      } as Profile;
     },
     staleTime: 60_000,
   });

@@ -44,20 +44,52 @@ export async function callMoodle<T = any>(
   return data as T;
 }
 
-export async function getMoodleSession(userId: string) {
-  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-  const { data: tok } = await supabaseAdmin
-    .from("moodle_tokens")
-    .select("token")
-    .eq("user_id", userId)
-    .maybeSingle();
-  const { data: profile } = await supabaseAdmin
-    .from("profiles")
-    .select("moodle_user_id, role, full_name, numl_id")
-    .eq("id", userId)
-    .maybeSingle();
-  if (!tok?.token || !profile) throw new MoodleError("Please sign in again with your NUML account.", "nosession");
-  return { token: tok.token, moodleUserId: Number(profile.moodle_user_id), role: profile.role, fullName: profile.full_name, numlId: profile.numl_id };
+export interface MoodleSessionData {
+  token: string;
+  moodleUserId: number;
+  role: string;
+  fullName: string;
+  numlId: string;
+}
+
+const memorySessionStore = new Map<string, MoodleSessionData>();
+
+export function setMoodleSessionCache(userId: string, data: MoodleSessionData) {
+  memorySessionStore.set(userId, data);
+}
+
+export async function getMoodleSession(userId: string): Promise<MoodleSessionData> {
+  const cached = memorySessionStore.get(userId);
+  if (cached) return cached;
+
+  try {
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data: tok } = await supabaseAdmin
+      .from("moodle_tokens")
+      .select("token")
+      .eq("user_id", userId)
+      .maybeSingle();
+    const { data: profile } = await supabaseAdmin
+      .from("profiles")
+      .select("moodle_user_id, role, full_name, numl_id")
+      .eq("id", userId)
+      .maybeSingle();
+    if (tok?.token && profile) {
+      const sess: MoodleSessionData = {
+        token: tok.token,
+        moodleUserId: Number(profile.moodle_user_id),
+        role: profile.role,
+        fullName: profile.full_name,
+        numlId: profile.numl_id,
+      };
+      memorySessionStore.set(userId, sess);
+      return sess;
+    }
+  } catch (err) {
+    console.warn("getMoodleSession database lookup warning:", err);
+  }
+
+  throw new MoodleError("Please sign in again with your NUML account.", "nosession");
 }
 
 export async function getCourses(token: string, moodleUserId: number) {
