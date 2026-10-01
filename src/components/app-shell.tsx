@@ -15,6 +15,8 @@ import { useProfile, initials } from "@/lib/use-profile";
 import { useI18n, useTheme } from "@/lib/i18n";
 import { AiChatBox } from "./ai-chat-box";
 import { useQueryClient } from "@tanstack/react-query";
+import { getStoredThread, saveStoredThreadMessages } from "@/lib/ai-history";
+import type { ChatMsg } from "@/lib/ai-client";
 
 type NavItem = { to: string; label: string; icon: any };
 
@@ -25,6 +27,9 @@ export function AppShell() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [aiOpen, setAiOpen] = useState(false);
   const [q, setQ] = useState("");
+  const [quickMessages, setQuickMessages] = useState<ChatMsg[]>(() => {
+    return getStoredThread("quick_chat")?.messages ?? [];
+  });
   const navigate = useNavigate();
   const qc = useQueryClient();
 
@@ -163,8 +168,25 @@ export function AppShell() {
       </div>
       <Sheet open={aiOpen} onOpenChange={setAiOpen}>
         <SheetContent side="right" className="flex w-full flex-col p-0 sm:max-w-md">
-          <SheetHeader className="border-b p-4"><SheetTitle>Study assistant</SheetTitle></SheetHeader>
-          <div className="min-h-0 flex-1"><AiChatBox compact /></div>
+          <SheetHeader className="border-b p-4 flex flex-row items-center justify-between">
+            <SheetTitle>Study assistant</SheetTitle>
+            <Button variant="ghost" size="sm" asChild onClick={() => setAiOpen(false)}>
+              <Link to="/ai" className="text-xs text-primary hover:underline">
+                Open full page
+              </Link>
+            </Button>
+          </SheetHeader>
+          <div className="min-h-0 flex-1">
+            <AiChatBox
+              compact
+              initial={quickMessages}
+              onChange={(msgs) => {
+                setQuickMessages(msgs);
+                saveStoredThreadMessages("quick_chat", msgs);
+                qc.invalidateQueries({ queryKey: ["ai-threads"] });
+              }}
+            />
+          </div>
         </SheetContent>
       </Sheet>
     </div>
