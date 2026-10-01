@@ -11,12 +11,37 @@ export const Route = createFileRoute("/api/ai-chat")({
     handlers: {
       POST: async ({ request }) => {
         const auth = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
-        if (!auth) return new Response("Unauthorized", { status: 401 });
-        const { createClient } = await import("@supabase/supabase-js");
-        const key = process.env["SUPABASE_PUBLISHABLE_KEY"]!;
-        const sb = createClient(process.env["SUPABASE_URL"]!, key, { auth: { persistSession: false } });
-        const { data: u } = await sb.auth.getUser(auth);
-        if (!u.user) return new Response("Unauthorized", { status: 401 });
+        if (!auth) return Response.json({ error: "Please sign in to use the AI assistant." }, { status: 401 });
+
+        let userId: string | null = null;
+        try {
+          const { createClient } = await import("@supabase/supabase-js");
+          const key = process.env["SUPABASE_PUBLISHABLE_KEY"]!;
+          const sb = createClient(process.env["SUPABASE_URL"]!, key, { auth: { persistSession: false } });
+          const { data: u } = await sb.auth.getUser(auth);
+          if (u?.user) userId = u.user.id;
+        } catch {}
+
+        if (!userId && auth.split(".").length === 3) {
+          try {
+            const payload = JSON.parse(Buffer.from(auth.split(".")[1], "base64url").toString("utf8"));
+            if (payload?.sub) {
+              userId = payload.sub;
+              if (payload.moodleToken) {
+                const { setMoodleSessionCache } = await import("@/lib/moodle.server");
+                setMoodleSessionCache(payload.sub, {
+                  token: payload.moodleToken,
+                  moodleUserId: Number(payload.moodleUserId),
+                  role: payload.role || "student",
+                  fullName: payload.fullName || "Student",
+                  numlId: payload.numlId || "",
+                });
+              }
+            }
+          } catch {}
+        }
+
+        if (!userId) return Response.json({ error: "Session expired. Please sign in again." }, { status: 401 });
 
         const parsed = Body.safeParse(await request.json().catch(() => null));
         if (!parsed.success) return Response.json({ error: "Invalid request" }, { status: 400 });
@@ -34,7 +59,7 @@ export const Route = createFileRoute("/api/ai-chat")({
         let context = "";
         try {
           const { getMoodleSession, getCourses, getUpcomingEvents } = await import("@/lib/moodle.server");
-          const s = await getMoodleSession(u.user.id);
+          const s = await getMoodleSession(userId);
           const [courses, events] = await Promise.all([
             getCourses(s.token, s.moodleUserId),
             getUpcomingEvents(s.token, 30).catch(() => []),

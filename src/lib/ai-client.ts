@@ -7,8 +7,15 @@ export async function streamAi(
   onDelta: (text: string) => void,
   signal?: AbortSignal | undefined,
 ): Promise<void> {
-  const { data } = await supabase.auth.getSession();
-  const token = data.session?.access_token;
+  let token: string | null | undefined = null;
+  try {
+    const { data } = await supabase.auth.getSession();
+    token = data.session?.access_token;
+  } catch {}
+  if (!token && typeof window !== "undefined") {
+    token = localStorage.getItem("numl_token");
+  }
+
   const res = await fetch("/api/ai-chat", {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token ?? ""}` },
