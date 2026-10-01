@@ -14,22 +14,33 @@ export function useProfile() {
   return useQuery({
     queryKey: ["me"],
     queryFn: async () => {
-      const { data: u } = await supabase.auth.getUser();
-      if (!u.user) return null;
       try {
-        const { data } = await supabase.from("profiles").select("*").eq("id", u.user.id).maybeSingle();
-        if (data) return data as Profile;
+        const { data: u } = await supabase.auth.getUser();
+        if (u?.user) {
+          try {
+            const { data } = await supabase.from("profiles").select("*").eq("id", u.user.id).maybeSingle();
+            if (data) return data as Profile;
+          } catch {}
+
+          const meta = u.user.user_metadata || {};
+          return {
+            id: u.user.id,
+            numl_id: meta.numl_id || "",
+            full_name: meta.full_name || u.user.email?.split("@")[0] || "Student",
+            role: meta.role || "student",
+            avatar_url: meta.avatar_url || null,
+            moodle_user_id: meta.moodle_user_id || 0,
+          } as Profile;
+        }
       } catch {}
 
-      const meta = u.user.user_metadata || {};
-      return {
-        id: u.user.id,
-        numl_id: meta.numl_id || "",
-        full_name: meta.full_name || u.user.email?.split("@")[0] || "Student",
-        role: meta.role || "student",
-        avatar_url: meta.avatar_url || null,
-        moodle_user_id: meta.moodle_user_id || 0,
-      } as Profile;
+      const local = typeof window !== "undefined" ? localStorage.getItem("numl_user") : null;
+      if (local) {
+        try {
+          return JSON.parse(local) as Profile;
+        } catch {}
+      }
+      return null;
     },
     staleTime: 60_000,
   });

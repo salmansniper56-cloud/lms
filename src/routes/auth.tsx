@@ -38,7 +38,13 @@ function AuthPage() {
         setError(r.error);
         return;
       }
-      await supabase.auth.setSession({ access_token: r.access_token, refresh_token: r.refresh_token });
+      if (r.access_token) {
+        localStorage.setItem("numl_token", r.access_token);
+        if (r.user) localStorage.setItem("numl_user", JSON.stringify(r.user));
+        try {
+          await supabase.auth.setSession({ access_token: r.access_token, refresh_token: r.refresh_token });
+        } catch {}
+      }
       navigate({ to: "/dashboard" });
     } catch (err: any) {
       setError(err?.message || "Could not reach NUML LMS.");
